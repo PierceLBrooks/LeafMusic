@@ -1,3 +1,4 @@
+import os
 import sys
 import math
 import bisect
@@ -5,6 +6,8 @@ import pygame
 import pygame.midi
 import random
 from time import sleep
+from datetime import datetime
+from midiutil.MidiFile import MIDIFile
 
 class Leaf(object):
     def __init__(self,pitch):
@@ -27,15 +30,24 @@ class Leaf(object):
             print(report)
             self.tree.pitchLast = pitch
             self.tree.notes.append([pitch,duration])
+            if not (self.tree.output == None):
+                self.tree.output.addNote(self.tree.track,self.tree.channel,pitch,self.tree.time,duration,volume)
+                self.tree.time += duration
             if (len(sys.argv) < 3):
                 self.tree.midi.note_on(pitch,volume)
-                sleep(duration)
+                try:
+                    sleep(duration)
+                except:
+                    self.tree.midi.note_off(pitch,volume)
+                    return False
                 self.tree.midi.note_off(pitch,volume)
         else:
             report += str(self.layer)+"  "+str(pitchToReport)+"  "+str(len(self.children))
             print(report)
             for i in range(len(self.children)):
-                self.children[i].play(duration/float(len(self.children)))
+                if not (self.children[i].play(duration/float(len(self.children)))):
+                    return False
+        return True
     def getLeafPopulation(self):
         if (len(self.children) == 0):
             return 1
@@ -137,7 +149,7 @@ class Leaf(object):
             pitchNew += float(self.pitch)
             self.addChild(Leaf(int(pitchNew)),i)
 class Tree(object):
-    def __init__(self,root,instrument,volume,midi):
+    def __init__(self,root,instrument,volume,midi,seed):
         self.root = root
         root.tree = self
         self.notes = []
@@ -147,6 +159,15 @@ class Tree(object):
         self.population = 1
         self.pitch = 0
         self.pitchLast = 0
+        self.seed = seed
+        self.output = None
+        self.track = 0
+        self.channel = 0
+        self.time = 0
+        if not (self.seed == None):
+            self.output = MIDIFile(1)
+            self.output.addTrackName(self.track,self.time,str(self.seed))
+            self.output.addTempo(self.track,self.time,60)
     def getMagicNumber(self,seed,spread):
         span = 1.0-(1.0/seed)
         if not (spread):
@@ -165,9 +186,14 @@ class Tree(object):
         return leaf
     def play(self,duration):
         print("Here we go...")
+        now = datetime.now()
+        print(now.strftime("%d-%m-%Y@%H:%M:%S"))
         self.notes = []
         self.midi.set_instrument(self.instrument)
-        self.root.play(duration)
+        interruption = self.root.play(duration)
+        now = datetime.now()
+        print(now.strftime("%d-%m-%Y@%H:%M:%S"))
+        return interruption
     def generate(self,populationTarget):
         leafPopulation = self.root.getLeafPopulation()
         difference = abs(self.population-leafPopulation)
@@ -177,6 +203,7 @@ class Tree(object):
             leafPopulation = self.root.getLeafPopulation()
             difference = abs(self.population-leafPopulation)
 if (__name__ == "__main__"):
+    seed = None
     if (len(sys.argv) > 1):
         seed = int(sys.argv[1])
         print("Seed:",sys.argv[1],seed)
@@ -199,9 +226,15 @@ if (__name__ == "__main__"):
     midi = pygame.midi.Output(port,1)
     notes = []
     for i in range(descendents+1):
-        tree = Tree(Leaf(pitchRoot),instrument,volume,midi)
+        tree = Tree(Leaf(pitchRoot),instrument,volume,midi,seed)
         tree.generate(population)
-        tree.play(duration)
+        if not (tree.play(duration)):
+            tree.notes = None
+        if not (tree.output == None):
+            handle = open(os.path.join(os.getcwd(), os.path.basename(sys.argv[0]+"_"+str(i)+"_"+str(seed))+".mid"), "wb")
+            tree.output.writeFile(handle)
+        if (tree.notes == None):
+            sys.exit(0)
         for note in tree.notes:
             notes.append(note)
         pitchRoot = tree.pitchLast
